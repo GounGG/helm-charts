@@ -1,0 +1,14 @@
+apiVersion: v1
+entries:
+  hdfs-ha:
+  - apiVersion: v2
+    appVersion: 3.3.3
+    created: "2025-12-05T16:01:18.797564+08:00"
+    description: Deploys the Hadoop Distributed File System (HDFS)
+    digest: 070940640cb33b027f48897641c686d8a527db9c2767f7ac8716a4879a516760
+    name: hdfs-ha
+    type: application
+    urls:
+    - https://goungg.github.io/helm-charts/hdfs-ha-2.2.1.tgz
+    version: 2.2.1
+generated: "2025-12-05T16:01:18.794917+08:00"
