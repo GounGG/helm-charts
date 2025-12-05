@@ -1,0 +1,119 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ template "hdfs.fullname" . }}-journalnode
+  labels:
+    {{- include "hdfs.labels" . | nindent 4 }}
+    app.kubernetes.io/component: journalnode
+spec:
+  podManagementPolicy: Parallel
+  replicas: 3
+  serviceName: {{ template "hdfs.fullname" . }}-journalnodes
+  updateStrategy:
+    type: OnDelete
+  selector:
+    matchLabels:
+      {{- include "hdfs.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: journalnode
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+      labels:
+        {{- include "hdfs.labels" $ | nindent 8 }}
+    spec:
+      {{- toYaml $.Values.journalnode.dataVolumes.pvcTemplateSpec | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/config.yaml") . | sha256sum }}
+        checksum/secrets: {{ include (print $.Template.BasePath "/secrets.yaml") . | sha256sum }}
+      labels:
+        {{- include "hdfs.labels" . | nindent 8 }}
+        app.kubernetes.io/component: journalnode
+    spec:
+      terminationGracePeriodSeconds: 180
+      containers:
+      - name: journalnode
+        image: {{ .Values.journalnode.repository }}:{{ .Values.journalnode.tag }}
+        imagePullPolicy: {{ .Values.journalnode.imagePullPolicy }}
+        args:
+        - journalnode
+        env:
+        - name: HADOOP_CONF_DIR
+          value: {{ .Values.config.path }}
+        {{- range $key, $value := .Values.journalnode.extraEnvVars }}
+        - name: {{ $key | upper | replace "." "_" }}
+          value: {{ $value | quote }}
+        {{- end }}
+        volumeMounts:
+        - name: log
+          mountPath: /var/log/hadoop
+        - name: config
+          mountPath: {{ .Values.config.path }}
+          readOnly: true
+        - name: secrets
+          mountPath: {{ .Values.secrets.path }}
+          readOnly: true
+        - name: data
+          mountPath: /data
+        ports:
+        - name: journalnode
+          containerPort: {{ .Values.journalnode.ports.journalnode }}
+        - name: http
+          containerPort: {{ .Values.journalnode.ports.http }}
+        livenessProbe:
+          httpGet:
+            scheme: HTTP
+            port: http
+            path: /
+          initialDelaySeconds: 30
+        readinessProbe:
+          httpGet:
+            scheme: HTTP
+            port: http
+            path: /
+          initialDelaySeconds: 30
+        resources:
+          {{- toYaml .Values.journalnode.resources | nindent 10 }}
+      volumes:
+      - name: config
+        configMap:
+          name: {{ template "hdfs.fullname" . }}
+          optional: false
+      - name: secrets
+        secret:
+          secretName: {{ template "hdfs.fullname" . }}
+          optional: false
+      - name: log
+        emptyDir: {}
+      {{- with .Values.journalnode.securityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      affinity:
+      {{- if .Values.journalnode.affinity }}
+        {{- toYaml .Values.journalnode.affinity | nindent 8 }}
+      {{- end }}
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+              - key: app.kubernetes.io/component
+                operator: In
+                values:
+                - journalnode
+            topologyKey: kubernetes.io/hostname
+      {{- with .Values.journalnode.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.journalnode.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.journalnode.imagePullSecrets }}
+      imagePullSecrets:
+      {{- range . }}
+      - name: {{ . }}
+      {{- end }}
+      {{- end }}

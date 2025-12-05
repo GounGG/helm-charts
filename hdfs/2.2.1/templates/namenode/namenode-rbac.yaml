@@ -1,0 +1,44 @@
+# ServiceAccount for NameNode pods
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ template "hdfs.fullname" . }}-namenode
+  labels:
+    {{ include "hdfs.labels" . | nindent 4 }}
+    app.kubernetes.io/component: namenode
+
+---
+# Role allowing NameNode to delete pods (for fencing)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ template "hdfs.fullname" . }}-namenode-fence
+  labels:
+    {{ include "hdfs.labels" . | nindent 4 }}
+    app.kubernetes.io/component: namenode
+rules:
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list", "delete"]
+- apiGroups: [""]
+  resources: ["pods/log"]
+  verbs: ["get"]
+
+---
+# RoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ template "hdfs.fullname" . }}-namenode-fence
+  labels:
+    {{ include "hdfs.labels" . | nindent 4 }}
+    app.kubernetes.io/component: namenode
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ template "hdfs.fullname" . }}-namenode-fence
+subjects:
+- kind: ServiceAccount
+  name: {{ template "hdfs.fullname" . }}-namenode
+  namespace: {{ .Release.Namespace }}
+

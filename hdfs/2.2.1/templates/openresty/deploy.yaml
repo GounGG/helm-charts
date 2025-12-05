@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ template "hdfs.fullname" . }}-openresty
+  labels:
+    app: {{ template "hdfs.fullname" . }}-openresty
+    component: proxy
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: {{ template "hdfs.fullname" . }}-openresty
+  template:
+    metadata:
+      labels:
+        app: {{ template "hdfs.fullname" . }}-openresty
+        component: proxy
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/openresty/config.yaml") . | sha256sum }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101
+        runAsGroup: 101
+        fsGroup: 101
+      containers:
+      - name: openresty
+        image: openresty/openresty:1.25.3.1-alpine
+        imagePullPolicy: IfNotPresent
+        ports:
+        - name: http
+          containerPort: 9870
+          protocol: TCP
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        volumeMounts:
+        - name: config
+          mountPath: /usr/local/openresty/nginx/conf/nginx.conf
+          subPath: nginx.conf
+        - name: tmp
+          mountPath: /tmp
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+      volumes:
+      - name: config
+        configMap:
+          name: {{ template "hdfs.fullname" . }}-openresty-config
+      - name: tmp
+        emptyDir: {}
+

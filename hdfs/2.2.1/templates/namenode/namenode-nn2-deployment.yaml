@@ -1,0 +1,251 @@
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ template "hdfs.fullname" . }}-namenode-nn2
+  labels:
+    {{- include "hdfs.labels" . | nindent 4 }}
+    app.kubernetes.io/component: namenode
+    namenode-id: nn2
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "hdfs.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: namenode
+      namenode-id: nn2
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/config.yaml") . | sha256sum }}
+        checksum/secrets: {{ include (print $.Template.BasePath "/secrets.yaml") . | sha256sum }}
+      labels:
+        {{- include "hdfs.labels" . | nindent 8 }}
+        app.kubernetes.io/component: namenode
+        namenode-id: nn2
+    spec:
+      hostname: {{ template "hdfs.fullname" . }}-namenode-nn2
+      terminationGracePeriodSeconds: 180
+      serviceAccountName: {{ template "hdfs.fullname" . }}-namenode
+      initContainers:
+      - name: wait-for-journalnode-startup
+        image: {{ .Values.alpine.repository}}:{{ .Values.alpine.tag }}
+        imagePullPolicy: {{ .Values.alpine.imagePullPolicy }}
+        command: [
+          "/bin/sh",
+          "-c",
+          'for i in $(seq 1 300); do nc -z -w3 {{ template "hdfs.fullname" . }}-journalnode-0.{{ template "hdfs.fullname" . }}-journalnodes:{{ .Values.journalnode.ports.journalnode }} && exit 0 || sleep 1; done; exit 1'
+        ]
+      - name: bootstrap-from-nn1
+        image: {{ .Values.namenode.repository }}:{{ .Values.namenode.tag }}
+        imagePullPolicy: {{ .Values.namenode.imagePullPolicy }}
+        command: ["/bin/bash","-c"]
+        args:
+          - |
+            export HADOOP_CONF_DIR={{ .Values.config.path }}
+            export HDFS_NAMENODE_OPTS="-Dhdfs.audit.logger=INFO,NullAppender -Ddfs.ha.namenode.id=nn2"
+            
+            # Wait for nn1 to be ready before bootstrapping
+            echo "Waiting for NameNode nn1 to be ready..."
+            NN1_HOST="{{ template "hdfs.fullname" . }}-namenode-nn1"
+            NN1_PORT={{ .Values.namenode.ports.http }}
+            for i in $(seq 1 600); do
+              if curl -s -f "http://${NN1_HOST}:${NN1_PORT}/jmx" > /dev/null 2>&1; then
+                echo "NameNode nn1 HTTP is responsive"
+                sleep 5
+                break
+              fi
+              echo "Waiting for nn1 HTTP endpoint... (attempt $i/600)"
+              sleep 2
+            done
+            
+            if [ -f /data/dfs/name/current/VERSION ]; then
+              echo "Existing NameNode metadata found, skip bootstrapStandby."
+              exit 0
+            fi
+            echo "No VERSION found, starting bootstrapStandby from nn1..."
+            hdfs namenode -bootstrapStandby -nonInteractive || true
+        env:
+        - name: HADOOP_CONF_DIR
+          value: {{ .Values.config.path }}
+        volumeMounts:
+        - name: log
+          mountPath: /var/log/hadoop
+        - name: config
+          mountPath: {{ .Values.config.path }}
+          readOnly: true
+        - name: secrets
+          mountPath: {{ .Values.secrets.path }}
+          readOnly: true
+        - name: data
+          mountPath: /data
+      containers:
+      - name: zkfc
+        image: {{ .Values.namenode.repository }}:{{ .Values.namenode.tag }}
+        imagePullPolicy: {{ .Values.namenode.imagePullPolicy }}
+        ports:
+        - name: zkfc-rpc
+          containerPort: {{ .Values.namenode.ports.zkfcRpc }}
+          protocol: TCP
+        command: ["/bin/bash", "-c"]
+        args:
+        - |
+          export HADOOP_CONF_DIR={{ .Values.config.path }}
+          export HDFS_ZKFC_OPTS="-Ddfs.ha.namenode.id=nn2"
+          # Wait for NameNode to be ready
+          echo "Waiting for NameNode to start..."
+          for i in $(seq 1 300); do
+            if curl -s -f http://localhost:{{ .Values.namenode.ports.http }}/jmx > /dev/null 2>&1; then
+              echo "NameNode HTTP is responsive"
+              sleep 3
+              echo "NameNode is ready, starting ZKFC with ID: nn2"
+              break
+            fi
+            echo "Waiting for NameNode... (attempt $i/300)"
+            sleep 2
+          done
+          exec hdfs zkfc -D dfs.ha.namenode.id=nn2
+        env:
+        - name: HADOOP_CONF_DIR
+          value: {{ .Values.config.path }}
+        {{- range $key, $value := .Values.namenode.extraEnvVars }}
+        - name: {{ $key | upper | replace "." "_" }}
+          value: {{ $value | quote }}
+        {{- end }}
+        volumeMounts:
+        - name: config
+          mountPath: {{ .Values.config.path }}
+          readOnly: true
+        - name: secrets
+          mountPath: {{ .Values.secrets.path }}
+          readOnly: true
+        - name: fence-script
+          mountPath: /scripts/fence-namenode.sh
+          subPath: fence-namenode.sh
+          readOnly: true
+        - name: log
+          mountPath: /var/log/hadoop
+        - name: data
+          mountPath: /data
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "200m"
+      - name: namenode
+        image: {{ .Values.namenode.repository }}:{{ .Values.namenode.tag }}
+        imagePullPolicy: {{ .Values.namenode.imagePullPolicy }}
+        command: ["/bin/bash", "-c"]
+        args:
+        - |
+          export HADOOP_CONF_DIR={{ .Values.config.path }}
+          export HDFS_NAMENODE_OPTS="-Dhdfs.audit.logger=INFO,NullAppender -Ddfs.ha.namenode.id=nn2"
+          exec hdfs namenode -D dfs.ha.namenode.id=nn2
+        env:
+        - name: HADOOP_CONF_DIR
+          value: {{ .Values.config.path }}
+        {{- range $key, $value := .Values.namenode.extraEnvVars }}
+        - name: {{ $key | upper | replace "." "_" }}
+          value: {{ $value | quote }}
+        {{- end }}
+        volumeMounts:
+        - name: config
+          mountPath: {{ .Values.config.path }}
+          readOnly: true
+        - name: secrets
+          mountPath: {{ .Values.secrets.path }}
+          readOnly: true
+        {{- if and .Values.config.rackAwareness .Values.config.rackAwareness.nodeTopologyLabel }}
+        - name: rack-awareness
+          mountPath: /scripts/resolve-rack.sh
+          subPath: resolve-rack.sh
+        {{- end }}
+        - name: data
+          mountPath: /data
+        - name: log
+          mountPath: /var/log/hadoop
+        ports:
+        - name: http
+          containerPort: {{ .Values.namenode.ports.http }}
+        - name: https
+          containerPort: {{ .Values.namenode.ports.https }}
+        - name: client-rpc
+          containerPort: {{ .Values.namenode.ports.clientRpc }}
+        - name: service-rpc
+          containerPort: {{ .Values.namenode.ports.serviceRpc }}
+        - name: lifeline-rpc
+          containerPort: {{ .Values.namenode.ports.lifelineRpc }}
+        livenessProbe:
+          exec:
+            command:
+            - /bin/bash
+            - -c
+            - hdfs dfsadmin -fs hdfs://localhost -safemode get
+          initialDelaySeconds: 30
+          periodSeconds: 30
+          timeoutSeconds: 30
+          successThreshold: 1
+          failureThreshold: 2
+        resources:
+          {{- toYaml .Values.namenode.resources | nindent 10 }}
+      volumes:
+      - name: log
+        emptyDir: {}
+      - name: config
+        configMap:
+          name: {{ template "hdfs.fullname" . }}
+          optional: false
+      - name: secrets
+        secret:
+          secretName: {{ template "hdfs.fullname" . }}
+          optional: false
+      - name: fence-script
+        configMap:
+          name: {{ template "hdfs.fullname" . }}-fence-script
+          defaultMode: 0755
+      {{- if .Values.config.rackAwareness }}
+      {{- if .Values.config.rackAwareness.nodeTopologyLabel }}
+      - name: rack-awareness
+        configMap:
+          name: {{ template "hdfs.fullname" . }}-rack-awareness
+          defaultMode: 0755
+      {{- end }}
+      {{- end }}
+      - name: data
+        persistentVolumeClaim:
+          claimName: {{ template "hdfs.fullname" $ }}-namenode-nn2-data
+      {{- with .Values.namenode.securityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      affinity:
+      {{- if .Values.namenode.affinity }}
+        {{- toYaml .Values.namenode.affinity | nindent 8 }}
+      {{- end }}
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+              - key: app.kubernetes.io/component
+                operator: In
+                values:
+                - namenode
+            topologyKey: kubernetes.io/hostname
+      {{- with .Values.namenode.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.namenode.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.namenode.imagePullSecrets }}
+      imagePullSecrets:
+      {{- range . }}
+      - name: {{ . }}
+      {{- end }}
+      {{- end }}

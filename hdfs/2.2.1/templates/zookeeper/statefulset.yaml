@@ -1,0 +1,141 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ template "hdfs.fullname" . }}-zk
+spec:
+  serviceName: {{ template "hdfs.fullname" . }}-zk-svc
+  replicas: 3
+  selector:
+    matchLabels:
+      app: {{ template "hdfs.fullname" . }}-zk
+  template:
+    metadata:
+      labels:
+        app: {{ template "hdfs.fullname" . }}-zk
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/zookeeper/config.yaml") . | sha256sum }}
+    spec:
+      terminationGracePeriodSeconds: 180
+      {{- if .Values.zookeeper.nodeSelector }}
+      nodeSelector: 
+        {{- toYaml .Values.zookeeper.nodeSelector | nindent 8 }}
+      {{- end }}
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+              - key: app
+                operator: In
+                values:
+                - {{ template "hdfs.fullname" . }}-zk
+            topologyKey: kubernetes.io/hostname
+      containers:
+      - name: agent
+        imagePullPolicy: IfNotPresent
+        image: harbor.web.garenanow.com/library/zookeeper_exporter:v1.0.2
+        resources:
+          limits:
+            cpu: 100m
+            memory: 128Mi
+          requests: 
+            memory: 64Mi
+            cpu: 100m
+        ports:
+        - name: exporter
+          containerPort: 9141
+      - name: k8szk
+        imagePullPolicy: IfNotPresent
+        image: harbor.web.garenanow.com/library/google_samples/k8szk:v1
+        resources:
+          limits:
+            cpu: "1"
+            memory: 4Gi
+          requests:
+            memory: "2Gi"
+            cpu: "100m"
+        ports:
+        - containerPort: 2181
+          name: client
+        - containerPort: 2888
+          name: server
+        - containerPort: 3888
+          name: leader-election
+        env:
+        - name : ZK_ENSEMBLE
+          valueFrom:
+            configMapKeyRef:
+              name: {{ template "hdfs.fullname" . }}-zk-config
+              key: ensemble
+        - name : ZK_HEAP_SIZE
+          valueFrom:
+            configMapKeyRef:
+                name: {{ template "hdfs.fullname" . }}-zk-config
+                key: jvm.heap
+        - name : ZK_TICK_TIME
+          valueFrom:
+            configMapKeyRef:
+                name: {{ template "hdfs.fullname" . }}-zk-config
+                key: tick
+        - name : ZK_INIT_LIMIT
+          valueFrom:
+            configMapKeyRef:
+                name: {{ template "hdfs.fullname" . }}-zk-config
+                key: init
+        - name : ZK_SYNC_LIMIT
+          valueFrom:
+            configMapKeyRef:
+                name: {{ template "hdfs.fullname" . }}-zk-config
+                key: tick
+        - name : ZK_MAX_CLIENT_CNXNS
+          valueFrom:
+            configMapKeyRef:
+                name: {{ template "hdfs.fullname" . }}-zk-config
+                key: client.cnxns
+        - name: ZK_SNAP_RETAIN_COUNT
+          valueFrom:
+            configMapKeyRef:
+                name: {{ template "hdfs.fullname" . }}-zk-config
+                key: snap.retain
+        - name: ZK_PURGE_INTERVAL
+          valueFrom:
+            configMapKeyRef:
+                name: {{ template "hdfs.fullname" . }}-zk-config
+                key: purge.interval
+        - name: ZK_CLIENT_PORT
+          value: "2181"
+        - name: ZK_SERVER_PORT
+          value: "2888"
+        - name: ZK_ELECTION_PORT
+          value: "3888"
+        command:
+        - sh
+        - -c
+        - zkGenConfig.sh && zkServer.sh start-foreground
+        readinessProbe:
+          exec:
+            command:
+            - "zkOk.sh"
+          initialDelaySeconds: 15
+          timeoutSeconds: 5
+        livenessProbe:
+          exec:
+            command:
+            - "zkOk.sh"
+          initialDelaySeconds: 15
+          timeoutSeconds: 5
+        volumeMounts:
+        - name: datadir
+          mountPath: /var/lib/zookeeper
+      securityContext:
+        runAsUser: 1000
+        fsGroup: 1000
+  volumeClaimTemplates:
+  - metadata:
+      name: datadir
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      storageClassName: {{ .Values.zookeeper.persistence.storageClass }}
+      resources:
+        requests:
+          storage: {{ .Values.zookeeper.persistence.size }}

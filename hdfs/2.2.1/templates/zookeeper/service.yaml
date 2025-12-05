@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ template "hdfs.fullname" . }}-zk-svc
+  labels:
+    app: {{ template "hdfs.fullname" . }}-zk
+  annotations:
+    prometheus.io/scrape: "true" 
+    prometheus.io/path: "/metrics" 
+    prometheus.io/port: "9141" 
+spec:
+  ports:
+  - port: 2181
+    name: client
+  - port: 2888
+    name: server
+  - port: 3888
+    name: leader-election
+  - name: exporter
+    port: 9141
+  clusterIP: None
+  selector:
+    app: {{ template "hdfs.fullname" . }}-zk

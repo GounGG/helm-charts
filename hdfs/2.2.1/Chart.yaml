@@ -1,0 +1,6 @@
+apiVersion: v2
+appVersion: 3.3.3
+description: Deploys the Hadoop Distributed File System (HDFS)
+name: hdfs
+type: application
+version: 2.2.1

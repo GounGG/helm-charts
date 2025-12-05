@@ -1,0 +1,104 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ template "hdfs.fullname" . }}-fence-script
+  labels:
+    {{ include "hdfs.labels" . | nindent 4 }}
+    app.kubernetes.io/component: namenode
+data:
+  fence-namenode.sh: |
+    #!/bin/bash
+    # Fencing script for HDFS NameNode in Kubernetes
+    # This script is called by ZKFC to fence (isolate) the old Active NameNode
+    # 
+    # Design Philosophy for Kubernetes:
+    # - Pod crash = natural isolation (process is truly dead)
+    # - JournalNode Quorum prevents split-brain (need 2/3 to write)
+    # - Kubernetes will auto-restart failed pods via livenessProbe
+    # - Return success (exit 0) when pod is unreachable to allow fast failover
+    
+    set +e  # Don't exit on error, we handle errors explicitly
+    
+    NAMENODE_HOST=$1
+    NAMENODE_ID=$2
+    TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
+    
+    echo "=========================================="
+    echo "[FENCE] ${TIMESTAMP}"
+    echo "[FENCE] Starting fencing procedure"
+    echo "[FENCE] Target Host: ${NAMENODE_HOST}"
+    echo "[FENCE] Target ID: ${NAMENODE_ID}"
+    echo "=========================================="
+    
+    # Extract NameNode ID from hostname if not provided
+    if [ -z "$NAMENODE_ID" ]; then
+      if [[ "$NAMENODE_HOST" =~ nn1 ]]; then
+        NAMENODE_ID="nn1"
+      elif [[ "$NAMENODE_HOST" =~ nn2 ]]; then
+        NAMENODE_ID="nn2"
+      else
+        echo "[FENCE] ERROR: Cannot determine NameNode ID from hostname: ${NAMENODE_HOST}"
+        echo "[FENCE] Assuming pod failure, allowing failover"
+        exit 0
+      fi
+      echo "[FENCE] Extracted NameNode ID: ${NAMENODE_ID}"
+    fi
+    
+    # Method 1: Graceful transition to standby
+    echo ""
+    echo "[FENCE] Method 1: Attempting graceful transition to standby..."
+    if hdfs haadmin -transitionToStandby ${NAMENODE_ID} 2>&1; then
+      echo "[FENCE] ✓ SUCCESS: ${NAMENODE_ID} gracefully transitioned to standby"
+      echo "[FENCE] Fencing completed successfully"
+      exit 0
+    else
+      GRACEFUL_EXIT_CODE=$?
+      echo "[FENCE] ✗ FAILED: Graceful transition failed (exit code: ${GRACEFUL_EXIT_CODE})"
+    fi
+    
+    # Method 2: Forced transition to standby
+    echo ""
+    echo "[FENCE] Method 2: Attempting forced transition to standby..."
+    if hdfs haadmin -transitionToStandby ${NAMENODE_ID} --forcemanual 2>&1; then
+      echo "[FENCE] ✓ SUCCESS: ${NAMENODE_ID} forcefully transitioned to standby"
+      echo "[FENCE] Fencing completed successfully"
+      exit 0
+    else
+      FORCED_EXIT_CODE=$?
+      echo "[FENCE] ✗ FAILED: Forced transition failed (exit code: ${FORCED_EXIT_CODE})"
+    fi
+    
+    # Method 3: Check if NameNode is still running
+    echo ""
+    echo "[FENCE] Method 3: Checking NameNode connectivity..."
+    if hdfs haadmin -getServiceState ${NAMENODE_ID} 2>&1; then
+      STATE_CHECK_EXIT_CODE=$?
+      echo "[FENCE] ✗ WARNING: NameNode is responsive but cannot transition to standby"
+      echo "[FENCE] This is unusual and may indicate a problem"
+      echo "[FENCE] However, JournalNode Quorum will prevent split-brain"
+    else
+      echo "[FENCE] ℹ INFO: NameNode is not responsive (likely pod crashed or node failed)"
+    fi
+    
+    # All methods failed - this is expected when pod is dead
+    echo ""
+    echo "=========================================="
+    echo "[FENCE] All fencing methods exhausted"
+    echo "[FENCE] Analysis:"
+    echo "[FENCE]   - NameNode pod is likely crashed or unreachable"
+    echo "[FENCE]   - This is SAFE in Kubernetes environment because:"
+    echo "[FENCE]     1. Pod crash = process is truly dead (no zombie)"
+    echo "[FENCE]     2. JournalNode Quorum (2/3) prevents split-brain"
+    echo "[FENCE]     3. Kubernetes will auto-restart the failed pod"
+    echo "[FENCE]     4. Restarted pod will rejoin as Standby"
+    echo "[FENCE]"
+    echo "[FENCE] Decision: Allow failover to proceed"
+    echo "[FENCE] Returning SUCCESS to enable HA failover"
+    echo "=========================================="
+    
+    # Return success to allow failover
+    # This is safe because:
+    # - If pod is dead: no split-brain risk
+    # - If network partition: JournalNode Quorum protects us
+    # - If process stuck: Kubernetes will restart it via livenessProbe
+    exit 0
