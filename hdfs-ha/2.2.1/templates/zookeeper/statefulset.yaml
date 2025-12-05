@@ -33,7 +33,7 @@ spec:
       containers:
       - name: agent
         imagePullPolicy: IfNotPresent
-        image: harbor.web.garenanow.com/library/zookeeper_exporter:v1.0.2
+        image: zookeeper_exporter:v1.0.2
         resources:
           limits:
             cpu: 100m
@@ -46,7 +46,7 @@ spec:
           containerPort: 9141
       - name: k8szk
         imagePullPolicy: IfNotPresent
-        image: harbor.web.garenanow.com/library/google_samples/k8szk:v1
+        image: google_samples/k8szk:v1
         resources:
           limits:
             cpu: "1"
